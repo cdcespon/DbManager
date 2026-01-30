@@ -1,0 +1,98 @@
+@using DBmanager.Services
+@using DBmanager.Models
+@inject SqliteService SqliteService
+@inject AppState AppState
+@implements IDisposable
+
+@if (columns == null && AppState.CurrentTableName != null)
+{
+    <p>Loading...</p>
+}
+else if (AppState.CurrentTableName == null)
+{
+    <p>Select a table to view structure.</p>
+}
+else
+{
+    <RadzenDataGrid Data="@columns" TItem="ColumnInfo" AllowSorting="true" AllowResizing="true" Density="Density.Compact" GridLines="Radzen.DataGridGridLines.Both">
+        <Columns>
+            <RadzenDataGridColumn TItem="ColumnInfo" Property="Name" Title="Name" />
+            <RadzenDataGridColumn TItem="ColumnInfo" Property="Type" Title="Data type" />
+             <RadzenDataGridColumn TItem="ColumnInfo" Property="Pk" Title="Primary Key" Width="80px">
+                <Template Context="data">
+                    <RadzenIcon Icon="@(data.Pk > 0 ? "vpn_key" : "")" IconStyle="IconStyle.Warning" Visible="@(data.Pk > 0)" />
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="ColumnInfo" Property="NotNull" Title="Not NULL" Width="80px">
+                <Template Context="data">
+                     <RadzenIcon Icon="@(data.NotNull > 0 ? "do_not_disturb_on" : "")" Visible="@(data.NotNull > 0)" />
+                </Template>
+            </RadzenDataGridColumn>
+             <RadzenDataGridColumn TItem="ColumnInfo" Property="Dflt_Value" Title="Default value" />
+        </Columns>
+    </RadzenDataGrid>
+
+    <div style="margin-top: 20px;">
+        <h5>Indexes / Foreign Keys (Placeholder)</h5>
+         <RadzenDataGrid Data="@fks" TItem="ForeignKeyInfo" AllowSorting="true" Density="Density.Compact">
+             <Columns>
+                  <RadzenDataGridColumn TItem="ForeignKeyInfo" Property="Id" Title="ID" Width="50px" />
+                  <RadzenDataGridColumn TItem="ForeignKeyInfo" Property="Table" Title="Ref Table" />
+                  <RadzenDataGridColumn TItem="ForeignKeyInfo" Property="From" Title="From" />
+                  <RadzenDataGridColumn TItem="ForeignKeyInfo" Property="To" Title="To" />
+             </Columns>
+         </RadzenDataGrid>
+
+    </div>
+}
+
+@code {
+    List<ColumnInfo>? columns;
+    List<ForeignKeyInfo>? fks;
+
+    protected override void OnInitialized()
+    {
+        AppState.OnChange += StateChanged;
+        // Load initial if set
+        if (!string.IsNullOrEmpty(AppState.CurrentTableName))
+        {
+            LoadData();
+        }
+    }
+
+    void StateChanged()
+    {
+        InvokeAsync(async () => 
+        {
+            await LoadData();
+            StateHasChanged();
+        });
+    }
+
+    async Task LoadData()
+    {
+        columns = null; 
+        fks = null;
+        
+        if (string.IsNullOrEmpty(AppState.CurrentConnectionString) || string.IsNullOrEmpty(AppState.CurrentTableName)) 
+        {
+            return;
+        }
+
+        try 
+        {
+            columns = await SqliteService.GetTableColumnsAsync(AppState.CurrentConnectionString, AppState.CurrentTableName);
+            fks = await SqliteService.GetForeignKeysAsync(AppState.CurrentConnectionString, AppState.CurrentTableName);
+        }
+        catch (Exception ex)
+        {
+             // Show error inline or ignore
+             Console.WriteLine(ex.Message);
+        }
+    }
+
+    public void Dispose()
+    {
+        AppState.OnChange -= StateChanged;
+    }
+}

@@ -1,0 +1,41 @@
+@using DBmanager.Models
+@using DBmanager.Services
+@inject SqliteService SqliteService
+@inject AppState AppState
+@inject Radzen.DialogService DialogService
+
+<div class="row">
+    <div class="col-md-12">
+        <RadzenListBox @bind-Value="SelectedTables" Data="@AllTables" TextProperty="Name" ValueProperty="Name" 
+                       Multiple="true" Style="height: 300px; width: 100%;" AllowFiltering="true" />
+    </div>
+</div>
+<div class="row mt-3">
+    <div class="col-md-12 text-right">
+        <RadzenButton Text="Add Selected" Click="Confirm" ButtonStyle="ButtonStyle.Primary" />
+        <RadzenButton Text="Cancel" Click="Cancel" ButtonStyle="ButtonStyle.Light" Class="mr-2" />
+    </div>
+</div>
+
+@code {
+    List<TableInfo> AllTables = new List<TableInfo>();
+    IEnumerable<string> SelectedTables = new List<string>();
+
+    protected override async Task OnInitializedAsync()
+    {
+         if (!string.IsNullOrEmpty(AppState.CurrentConnectionString))
+         {
+             AllTables = await SqliteService.GetTablesAsync(AppState.CurrentConnectionString);
+         }
+    }
+
+    void Confirm()
+    {
+        DialogService.Close(SelectedTables.ToList());
+    }
+
+    void Cancel()
+    {
+        DialogService.Close(null);
+    }
+}

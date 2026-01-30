@@ -1,0 +1,129 @@
+@using DBmanager.Services
+@using DBmanager.Models
+@inject SqliteService SqliteService
+@inject AppState AppState
+@implements IDisposable
+
+@if (isLoading && AppState.CurrentTableName != null)
+{
+    <div style="padding: 20px; text-align: center;">
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Medium" />
+        <p>Loading data...</p>
+    </div>
+}
+else if (AppState.CurrentTableName == null)
+{
+    <p style="padding: 20px;">Select a table to view data.</p>
+}
+else if (error != null)
+{
+    <RadzenAlert Severity="AlertSeverity.Error" Variant="Variant.Flat" Style="margin: 10px;">
+        @error
+    </RadzenAlert>
+}
+else if (data != null)
+{
+    <div style="padding: 10px; height: 100%; display: flex; flex-direction: column;">
+        <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center;">
+            <RadzenButton Text="Refresh" Icon="refresh" Click="LoadData" Size="ButtonSize.Small" />
+            <span style="color: #666; font-size: 0.9em;">@data.Count() rows loaded</span>
+        </div>
+        <div style="flex: 1; overflow: auto;">
+            <RadzenDataGrid Data="@data" TItem="IDictionary<string, object>" 
+                            ColumnWidth="150px" 
+                            AllowFiltering="true" 
+                            AllowPaging="true" 
+                            PageSize="50" 
+                            AllowSorting="true"
+                            AllowColumnResize="true"
+                            Density="Density.Compact"
+                            GridLines="Radzen.DataGridGridLines.Both">
+                <Columns>
+                    @foreach (var col in columns)
+                    {
+                        <RadzenDataGridColumn TItem="IDictionary<string, object>" Title="@col" Type="typeof(string)">
+                            <Template Context="row">
+                                @if(row.ContainsKey(col) && row[col] != null)
+                                {
+                                    @row[col].ToString()
+                                }
+                            </Template>
+                        </RadzenDataGridColumn>
+                    }
+                </Columns>
+            </RadzenDataGrid>
+        </div>
+    </div>
+}
+
+@code {
+    bool isLoading = false;
+    string? error;
+    IEnumerable<IDictionary<string, object>>? data;
+    List<string> columns = new List<string>();
+
+    protected override void OnInitialized()
+    {
+        AppState.OnChange += StateChanged;
+        if (!string.IsNullOrEmpty(AppState.CurrentTableName))
+        {
+            _ = LoadData();
+        }
+    }
+
+    void StateChanged()
+    {
+        InvokeAsync(async () => 
+        {
+            await LoadData();
+            StateHasChanged();
+        });
+    }
+
+    async Task LoadData()
+    {
+        error = null;
+        data = null;
+        columns.Clear();
+        isLoading = true;
+        StateHasChanged();
+
+        if (string.IsNullOrEmpty(AppState.CurrentConnectionString) || string.IsNullOrEmpty(AppState.CurrentTableName)) 
+        {
+            isLoading = false;
+            return;
+        }
+
+        try 
+        {
+            var result = await SqliteService.GetTableDataAsync(AppState.CurrentConnectionString, AppState.CurrentTableName);
+            
+            if (result.Any())
+            {
+                var firstRow = result.First() as IDictionary<string, object>;
+                if (firstRow != null)
+                {
+                    columns = firstRow.Keys.ToList();
+                }
+                data = result.Select(r => (IDictionary<string, object>)r).ToList();
+            }
+            else
+            {
+                data = new List<IDictionary<string, object>>();
+            }
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        AppState.OnChange -= StateChanged;
+    }
+}

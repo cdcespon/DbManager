@@ -1,0 +1,95 @@
+@using System.IO
+@using Microsoft.AspNetCore.Hosting
+@inject Radzen.DialogService DialogService
+@inject IWebHostEnvironment Env
+
+<div class="row">
+    <div class="col-md-12">
+        <RadzenText TextStyle="TextStyle.Subtitle1" Class="mb-2">Select SQLite Database File (.db, .sqlite)</RadzenText>
+        <InputFile OnChange="@LoadFiles" class="form-control" accept=".db,.sqlite" />
+    </div>
+</div>
+
+@if (isLoading)
+{
+    <div class="row mt-3">
+        <div class="col-md-12 text-center">
+            <RadzenProgressBar Value="100" ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+            <RadzenText TextStyle="TextStyle.Caption">Uploading...</RadzenText>
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="row mt-3">
+        <div class="col-md-12">
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter">
+                @errorMessage
+            </RadzenAlert>
+        </div>
+    </div>
+}
+
+<div class="row mt-4">
+    <div class="col-md-12 text-end">
+        <RadzenButton Text="Cancel" Click="Cancel" ButtonStyle="ButtonStyle.Light" Style="width: 80px" Disabled="@isLoading" />
+    </div>
+</div>
+
+@code {
+    bool isLoading = false;
+    string errorMessage = "";
+    
+    // Limit file size to 50 MB
+    long maxFileSize = 1024 * 1024 * 50; 
+
+    async Task LoadFiles(InputFileChangeEventArgs e)
+    {
+        isLoading = true;
+        errorMessage = "";
+        
+        try
+        {
+            var file = e.File;
+            if (file == null) return;
+
+            // Ensure Data directory exists
+            var dataPath = Path.Combine(Env.ContentRootPath, "Data");
+            if (!Directory.Exists(dataPath))
+            {
+                Directory.CreateDirectory(dataPath);
+            }
+
+            // Create unique filename to avoid collisions
+            // Or just overwrite? Plan said "append timestamp".
+            var cleanName = Path.GetFileNameWithoutExtension(file.Name);
+            var extension = Path.GetExtension(file.Name);
+            var timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+            var newFileName = $"{cleanName}_{timestamp}{extension}";
+            
+            var path = Path.Combine(dataPath, newFileName);
+
+            await using FileStream fs = new(path, FileMode.Create);
+            await file.OpenReadStream(maxFileSize).CopyToAsync(fs);
+
+            // Close dialog with the new file path
+            DialogService.Close(path);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error uploading file: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+            // File upload component triggers re-render automatically usually, but let's be safe if we stay open on error
+            //StateHasChanged();
+        }
+    }
+
+    void Cancel()
+    {
+        DialogService.Close(null);
+    }
+}

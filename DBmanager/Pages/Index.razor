@@ -1,0 +1,63 @@
+﻿@page "/"
+@using DBmanager.Shared
+@using DBmanager.Services
+@inject AppState AppState
+@implements IDisposable
+
+@if (AppState.CurrentDatabaseName != null)
+{
+    <div style="background: #ffffe0; padding: 5px; border-bottom: 1px solid #ccc; font-size: 0.8em;">
+        <strong>Debug Info:</strong> DB: @AppState.CurrentDatabaseName | @(AppState.CurrentObjectType ?? "Object"): @AppState.CurrentTableName | Conn: @(AppState.CurrentConnectionString != null ? "Set" : "Null")
+    </div>
+
+    <DatabaseToolbar />
+}
+
+@if (AppState.CurrentViewMode == ViewMode.QueryEditor)
+{
+    <QueryPanel />
+}
+else if (AppState.CurrentViewMode == ViewMode.DiagramDesigner)
+{
+    <DiagramDesigner />
+}
+else if (AppState.CurrentViewMode == ViewMode.TableDetails && AppState.CurrentTableName != null)
+{
+    <RadzenTabs RenderMode="TabRenderMode.Client">
+        <Tabs>
+            <RadzenTabsItem Text="Structure">
+                <TableStructure />
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Data">
+                <TableData />
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Query">
+                <QueryPanel />
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+}
+else if (AppState.CurrentViewMode == ViewMode.Dashboard || AppState.CurrentDatabaseName != null)
+{
+    <DatabaseDashboard />
+}
+else
+{
+    <div style="padding: 50px; text-align: center; color: #999;">
+        <RadzenIcon Icon="dns" Style="font-size: 4em; margin-bottom: 20px;" />
+        <h3>Select a Database to Begin</h3>
+        <p>Use the "Add Database" button or select one from the tree.</p>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized()
+    {
+        AppState.OnChange += StateHasChanged;
+    }
+
+    public void Dispose()
+    {
+        AppState.OnChange -= StateHasChanged;
+    }
+}

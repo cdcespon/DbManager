@@ -1,0 +1,283 @@
+@using DBmanager.Services
+@using DBmanager.Models
+@using Blazor.Diagrams.Options
+@inject SqliteService SqliteService
+@inject AppState AppState
+@inject Radzen.DialogService DialogService
+@inject Services.SessionService SessionService
+
+<div style="height: calc(100vh - 120px); width: 100%; display: flex; flex-direction: column;">
+    <div style="padding: 10px; background: #eee; border-bottom: 1px solid #ccc;">
+        <RadzenButton Text="Add Tables" Icon="add" Click="OpenAddTableDialog" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Small" />
+        <RadzenButton Text="Auto Arrange" Icon="grid_view" Click="AutoArrange" ButtonStyle="ButtonStyle.Info" Size="ButtonSize.Small" Class="ml-2" />
+        <RadzenButton Text="Clear Diagram" Icon="clear" Click="ClearDiagram" ButtonStyle="ButtonStyle.Danger" Size="ButtonSize.Small" Class="ml-2" />
+    </div>
+    <div style="flex: 1; border: 1px solid #ccc; background-color: #f4f4f4; position: relative;">
+        @if (Diagram != null)
+        {
+            <CascadingValue Value="Diagram">
+                 <DiagramCanvas />
+            </CascadingValue>
+        }
+    </div>
+</div>
+
+@code {
+    private BlazorDiagram? Diagram;
+    private string? _currentDbPath;
+
+    protected override async Task OnInitializedAsync() // Async for loading columns
+    {
+        _currentDbPath = AppState.CurrentDatabasePath;
+
+        var options = new BlazorDiagramOptions
+        {
+             AllowMultiSelection = true,
+             Zoom = 
+             {
+                 Enabled = true
+             },
+             Links =
+             {
+                 DefaultRouter = new Blazor.Diagrams.Core.Routers.NormalRouter(),
+                 DefaultPathGenerator = new Blazor.Diagrams.Core.PathGenerators.SmoothPathGenerator()
+             }
+        };
+
+        Diagram = new BlazorDiagram(options);
+        Diagram.RegisterComponent<TableNode, TableNodeWidget>();
+
+        // Load Saved Layout
+        if (!string.IsNullOrEmpty(_currentDbPath))
+        {
+             var layout = SessionService.GetDiagramLayout(_currentDbPath);
+             if (layout != null && layout.Nodes.Any())
+             {
+                 await LoadSavedLayout(layout);
+             }
+        }
+
+        // Auto-Save Hooks
+        Diagram.Nodes.Added += (n) => SaveLayout();
+        Diagram.Nodes.Removed += (n) => SaveLayout();
+        Diagram.PointerUp += (m, e) => SaveLayout(); // Save on mouse interaction end (dragging)
+    }
+    
+    async Task LoadSavedLayout(DiagramLayout layout)
+    {
+        var nodesMap = new Dictionary<string, NodeModel>();
+        foreach (var savedNode in layout.Nodes)
+        {
+             var node = new TableNode(new Blazor.Diagrams.Core.Geometry.Point(savedNode.X, savedNode.Y))
+             {
+                 Title = savedNode.TableName
+             };
+             
+             // Restore columns (we need to fetch them again or save them)
+             // Fetching is safer against schema changes
+             node.Columns = await SqliteService.GetTableColumnsAsync(AppState.CurrentConnectionString, savedNode.TableName);
+
+             node.AddPort(PortAlignment.Left);
+             node.AddPort(PortAlignment.Right);
+             node.AddPort(PortAlignment.Top);
+             node.AddPort(PortAlignment.Bottom);
+
+             Diagram.Nodes.Add(node);
+             nodesMap[savedNode.TableName] = node;
+        }
+
+        // Restore links
+        foreach (var tableName in nodesMap.Keys)
+        {
+            await AddLinksForTable(tableName, nodesMap);
+        }
+    }
+    
+    void SaveLayout()
+    {
+        if (string.IsNullOrEmpty(_currentDbPath)) return;
+        
+        var layout = new DiagramLayout();
+        foreach (var node in Diagram.Nodes) 
+        {
+            if (node is TableNode tableNode)
+            {
+                layout.Nodes.Add(new NodePosition 
+                { 
+                    TableName = tableNode.Title,
+                    X = tableNode.Position.X,
+                    Y = tableNode.Position.Y
+                });
+            }
+        }
+        
+        SessionService.UpdateDiagramLayout(_currentDbPath, layout);
+    }
+
+    async Task OpenAddTableDialog()
+    {
+        var result = await DialogService.OpenAsync<AddTableDialog>("Select Tables to Add", null);
+
+        if (result is List<string> selectedTables && selectedTables.Any())
+        {
+             await AddTablesToDiagram(selectedTables);
+        }
+    }
+    
+    async Task ClearDiagram()
+    {
+        if (Diagram != null && Diagram.Nodes.Any())
+        {
+            var result = await DialogService.Confirm("Are you sure you want to clear the diagram?", "Clear Diagram", new ConfirmOptions() { OkButtonText = "Yes", CancelButtonText = "No" });
+            if (result == true)
+            {
+                Diagram.Nodes.Clear();
+                Diagram.Links.Clear();
+            }
+        }
+    }
+
+    async Task AddTablesToDiagram(List<string> tableNames)
+    {
+        try
+        {
+            // Position parameters
+            int x = 50;
+            int y = 50;
+            // Find rightmost/bottommost position? For now just cascading
+            if (Diagram.Nodes.Any())
+            {
+                var lastNode = Diagram.Nodes.Last();
+                x = (int)lastNode.Position.X + 50;
+                y = (int)lastNode.Position.Y + 50;
+            }
+
+            var nodesMap = new Dictionary<string, NodeModel>();
+            
+            // Add existing nodes to map for linking
+            foreach(var n in Diagram.Nodes)
+            {
+                nodesMap[n.Title] = n;
+            }
+
+            foreach (var tableName in tableNames)
+            {
+                if (nodesMap.ContainsKey(tableName)) continue; // Already added
+
+                var node = new TableNode(new Blazor.Diagrams.Core.Geometry.Point(x, y))
+                {
+                    Title = tableName
+                };
+                
+                // Load Columns
+                node.Columns = await SqliteService.GetTableColumnsAsync(AppState.CurrentConnectionString, tableName);
+                
+                node.AddPort(PortAlignment.Left);
+                node.AddPort(PortAlignment.Right);
+                node.AddPort(PortAlignment.Top);
+                node.AddPort(PortAlignment.Bottom);
+
+                Diagram.Nodes.Add(node);
+                nodesMap[tableName] = node;
+
+                x += 30; // Stagger a bit more due to size
+                y += 30;
+            }
+            
+            // Refresh Links for ALL nodes involved (new + existing) against the new set
+            // We only need to check links where at least one end is in the NEW list
+            // Simpler: iterate new tables, find their FKs. If target is in nodesMap, link.
+            // AND iterate all existing tables, see if they point to new tables.
+            
+            // To be thorough without dupes:
+            // 1. Get ALL FKs for the newly added tables. Link if target exists in diagram.
+            foreach (var tableName in tableNames)
+            {
+                 await AddLinksForTable(tableName, nodesMap);
+            }
+            
+            // 2. Check OTHER existing nodes to see if they link to the new ones.
+            // Expensive to scan all. Maybe just accept that links appear when Source is added?
+            // Or typically we want Source -> Target. 
+            // If I add "OrderDetails" (Source), and "Orders" (Target) is already there, link appears.
+            // If I add "Orders" (Target), and "OrderDetails" (Source) is there... we need to check OrderDetails again.
+            // So yes, we should check all existing nodes to see if they link to the new ones.
+            
+            foreach (var existingNode in Diagram.Nodes)
+            {
+                if (!tableNames.Contains(existingNode.Title)) // If it's not one we just processed
+                {
+                     await AddLinksForTable(existingNode.Title, nodesMap);
+                }
+            }
+
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+            await DialogService.Alert($"Error adding tables: {ex.Message}");
+        }
+    }
+    
+    async Task AddLinksForTable(string tableName, Dictionary<string, NodeModel> nodesMap)
+    {
+        var fks = await SqliteService.GetForeignKeysAsync(AppState.CurrentConnectionString, tableName);
+        if (nodesMap.TryGetValue(tableName, out var sourceNode))
+        {
+            foreach (var fk in fks)
+            {
+                if (nodesMap.TryGetValue(fk.Table, out var targetNode))
+                {
+                    // Check if link already exists
+                    bool exists = Diagram.Links.Any(l => 
+                        (l.Source.Model is PortModel sp && sp.Parent == sourceNode && l.Target.Model is PortModel tp && tp.Parent == targetNode) ||
+                        (l.Source.Model is PortModel sp2 && sp2.Parent == targetNode && l.Target.Model is PortModel tp2 && tp2.Parent == sourceNode)
+                    ); 
+                    
+                    if (!exists)
+                    {
+                        var sourcePort = sourceNode.GetPort(PortAlignment.Right);
+                        var targetPort = targetNode.GetPort(PortAlignment.Left);
+                        
+                        if (sourcePort != null && targetPort != null)
+                        {
+                            var link = new LinkModel(sourcePort, targetPort);
+                            link.TargetMarker = LinkMarker.Arrow;
+                            Diagram.Links.Add(link);
+                        }
+                    }
+                }
+            }
+        }
+        }
+    void AutoArrange()
+    {
+        if (Diagram == null || !Diagram.Nodes.Any()) return;
+
+        var nodes = Diagram.Nodes.ToList();
+        int count = nodes.Count;
+        int cols = (int)Math.Ceiling(Math.Sqrt(count));
+        // Ensure at least 1 col if count > 0, though Sqrt(1)=1. Safety.
+        if (cols < 1) cols = 1;
+
+        int spacingX = 250;
+        int spacingY = 300; // Height can be variable, but fixed grid is simpler for now
+        int startX = 50;
+        int startY = 50;
+
+        for (int i = 0; i < count; i++)
+        {
+            int row = i / cols;
+            int col = i % cols;
+
+            double x = startX + (col * spacingX);
+            double y = startY + (row * spacingY);
+
+            nodes[i].SetPosition(x, y);
+            nodes[i].Refresh();
+        }
+        
+        // Refresh links? They should follow automatically.
+        Diagram.Refresh();
+    }
+}

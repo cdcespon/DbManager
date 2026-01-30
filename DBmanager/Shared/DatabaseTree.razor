@@ -1,0 +1,291 @@
+@using DBmanager.Services
+@using DBmanager.Models
+@using Microsoft.AspNetCore.Hosting
+@inject AppState AppState
+@inject SqliteService SqliteService
+@inject Radzen.DialogService DialogService
+@inject Radzen.NotificationService NotificationService
+@inject Radzen.ContextMenuService ContextMenuService
+@inject Services.SessionService SessionService
+@inject IWebHostEnvironment Env
+
+<RadzenTree Data="@nodes" Expand="@OnExpand" Collapse="@OnCollapse" Change="@OnChange" Style="height: 100%">
+    <RadzenTreeLevel TextProperty="Name" ChildrenProperty="Children" Expanded="@(data => ((DbNode)data).IsExpanded)" HasChildren="@(data => ((DbNode)data).Children != null && ((DbNode)data).Children.Any())">
+        <Template Context="item">
+            @{ var node = (DbNode)item.Value; }
+            <div @oncontextmenu="@(args => ShowContextMenu(args, node))" @oncontextmenu:preventDefault="true">
+                <RadzenIcon Icon="@GetNodeIcon(node, node.IsExpanded)" Style="margin-right: 5px; vertical-align: middle;" />
+                <span style="vertical-align: middle;">@node.Name</span>
+            </div>
+        </Template>
+    </RadzenTreeLevel>
+</RadzenTree>
+
+@code {
+    List<DbNode> nodes = new List<DbNode>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Load persist session
+        foreach (var dbPath in SessionService.CurrentSession.OpenDatabases)
+        {
+            await AddDatabaseNode(dbPath, saveToSession: false);
+        }
+    }
+    
+    // Separate method to allow creating node without saving to session (for loading)
+    async Task AddDatabaseNode(string path, bool saveToSession)
+    {
+        // Check if file still exists
+        if (!System.IO.File.Exists(path)) return;
+
+        var dbName = System.IO.Path.GetFileName(path);
+
+        // Check duplicates
+        if (nodes.Any(n => n.Payload == path)) return;
+        
+        // Root DB Node
+        var dbNode = new DbNode 
+        { 
+            Name = dbName, 
+            Icon = "dns", 
+            Type = "Database", 
+            Payload = path,
+            Children = new List<DbNode>(),
+            IsExpanded = false // Default closed on load
+        };
+
+        // Category Nodes (Tables / Views)
+        var tablesNode = new DbNode { Name = "Tables", Icon = "folder", Type = "Category", Parent = dbNode, IsExpanded = false };
+        var viewsNode = new DbNode { Name = "Views", Icon = "folder", Type = "Category", Parent = dbNode, IsExpanded = false };
+        
+        dbNode.Children.Add(tablesNode);
+        dbNode.Children.Add(viewsNode);
+        
+        nodes.Add(dbNode);
+
+        // Load content
+        await LoadSchema(dbNode, tablesNode, viewsNode);
+        
+        if (saveToSession)
+        {
+             SessionService.AddDatabase(path);
+             dbNode.IsExpanded = true; 
+             // Auto-select DB only when explicitly added by user
+             AppState.SetDatabase(dbNode.Payload);
+        }
+        
+        StateHasChanged();
+    }
+
+    public async Task AddDatabase(string path)
+    {
+        await AddDatabaseNode(path, saveToSession: true);
+    }
+
+    async Task LoadSchema(DbNode dbNode, DbNode tablesCategory, DbNode viewsCategory)
+    {
+        try 
+        {
+            var tables = await SqliteService.GetTablesAsync($"Data Source={dbNode.Payload}");
+            tablesCategory.Children = tables.Select(t => new DbNode 
+            { 
+                Name = t.Name, 
+                Icon = "table_chart", 
+                Type = "Table",
+                Payload = t.Name,
+                Parent = tablesCategory
+            }).ToList();
+
+            var views = await SqliteService.GetViewsAsync($"Data Source={dbNode.Payload}");
+            viewsCategory.Children = views.Select(v => new DbNode 
+            { 
+                Name = v.Name, 
+                Icon = "visibility", 
+                Type = "View",
+                Payload = v.Name,
+                Parent = viewsCategory
+            }).ToList();
+        }
+        catch (Exception ex)
+        {
+            await DialogService.Alert($"Failed to load schema: {ex.Message}", "Error");
+        }
+    }
+
+    void OnExpand(TreeExpandEventArgs args)
+    {
+        if (args.Value is DbNode node)
+        {
+            node.IsExpanded = true;
+        }
+        StateHasChanged();
+    }
+
+    void OnCollapse(TreeEventArgs args)
+    {
+        if (args.Value is DbNode node)
+        {
+            node.IsExpanded = false;
+        }
+        StateHasChanged();
+    }
+
+    void OnChange(TreeEventArgs args)
+    {
+        if (args.Value is DbNode node)
+        {
+            if (node.Type == "Database")
+            {
+                AppState.SetDatabase(node.Payload);
+            }
+            else if (node.Type == "Category")
+            {
+                var dbNode = FindParentDatabase(node);
+                if (dbNode != null)
+                {
+                    AppState.SetDatabase(dbNode.Payload);
+                }
+            }
+            else if (node.Type == "Table" || node.Type == "View")
+            {
+               var dbNode = FindParentDatabase(node);
+               if (dbNode != null)
+               {
+                   if (AppState.CurrentConnectionString != $"Data Source={dbNode.Payload}")
+                   {
+                        AppState.SetDatabase(dbNode.Payload);
+                   }
+                   AppState.SetTable(node.Name, node.Type); // Pass node.Type ("Table" or "View")
+               }
+            }
+        }
+    }
+
+    void ShowContextMenu(MouseEventArgs args, DbNode node)
+    {
+        if (node.Type == "Database")
+        {
+            ContextMenuService.Open(args,
+                new List<ContextMenuItem> {
+                    new ContextMenuItem { Text = "Refresh", Value = 1, Icon = "refresh" },
+                    new ContextMenuItem { Text = "New Query", Value = 2, Icon = "code" },
+                    new ContextMenuItem { Text = "Properties", Value = 3, Icon = "info" },
+                    new ContextMenuItem { Text = "Remove", Value = 4, Icon = "delete" },
+                }, 
+                async (e) =>
+                {
+                    if (e.Value is int actionId)
+                    {
+                        await HandleMenuAction(actionId, node);
+                    }
+                }
+            );
+        }
+    }
+
+    async Task HandleMenuAction(int actionId, DbNode node)
+    {
+        switch (actionId)
+        {
+            case 1: // Refresh
+                await RefreshDatabase(node);
+                break;
+            case 2: // New Query
+                 AppState.SetDatabase(node.Payload);
+                 AppState.SetViewMode(ViewMode.QueryEditor);
+                 break;
+            case 3: // Properties
+                 ShowProperties(node);
+                 break;
+            case 4: // Remove
+                 RemoveDatabase(node);
+                 break;
+        }
+    }
+
+    async Task RefreshDatabase(DbNode dbNode)
+    {
+        // 1. Clear existing children of Categories
+        var tablesNode = dbNode.Children.FirstOrDefault(c => c.Type == "Category" && c.Name == "Tables");
+        var viewsNode = dbNode.Children.FirstOrDefault(c => c.Type == "Category" && c.Name == "Views");
+
+        if (tablesNode != null) tablesNode.Children.Clear();
+        if (viewsNode != null) viewsNode.Children.Clear();
+
+        // 2. Reload
+        await LoadSchema(dbNode, tablesNode!, viewsNode!);
+        
+        // 3. Force Tree update? RadzenTree usually updates on data change.
+        StateHasChanged();
+        NotificationService.Notify(new NotificationMessage { Severity = NotificationSeverity.Success, Summary = "Refreshed", Detail = dbNode.Name, Duration = 3000 });
+    }
+
+    void RemoveDatabase(DbNode node)
+    {
+        nodes.Remove(node);
+        SessionService.RemoveDatabase(node.Payload);
+
+        if (AppState.CurrentDatabasePath == node.Payload)
+        {
+            // Reset to empty state if we removed the active DB
+            AppState.SetViewMode(ViewMode.None);
+        }
+        StateHasChanged();
+    }
+
+    void ShowProperties(DbNode node)
+    {
+        try 
+        {
+            var file = new System.IO.FileInfo(node.Payload);
+            DialogService.Open("Database Properties", ds =>
+                @<div class="p-3">
+                    <div class="row mb-2">
+                        <div class="col-md-4"><strong>Name:</strong></div>
+                        <div class="col-md-8">@node.Name</div>
+                    </div>
+                    <div class="row mb-2">
+                        <div class="col-md-4"><strong>Path:</strong></div>
+                        <div class="col-md-8" style="word-break: break-all;">@node.Payload</div>
+                    </div>
+                     <div class="row mb-2">
+                        <div class="col-md-4"><strong>Size:</strong></div>
+                        <div class="col-md-8">@((file.Length / 1024.0).ToString("N2")) KB</div>
+                    </div>
+                     <div class="row mb-2">
+                        <div class="col-md-4"><strong>Created:</strong></div>
+                        <div class="col-md-8">@file.CreationTime</div>
+                    </div>
+                    <div class="row mt-4 text-end">
+                         <RadzenButton Text="Close" Click="() => ds.Close()" />
+                    </div>
+                </div>
+            );
+        }
+        catch (Exception ex)
+        {
+             DialogService.Alert($"Failed to get properties: {ex.Message}");
+        }
+    }
+
+    DbNode? FindParentDatabase(DbNode startNode)
+    {
+        var current = startNode;
+        while (current != null)
+        {
+            if (current.Type == "Database") return current;
+            current = current.Parent;
+        }
+        return null;
+    }
+
+    string GetNodeIcon(DbNode node, bool isExpanded)
+    {
+        if (node.Type == "Category")
+        {
+            return isExpanded ? "folder_open" : "folder";
+        }
+        return node.Icon;
+    }
+}

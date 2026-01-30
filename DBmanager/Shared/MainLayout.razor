@@ -1,0 +1,70 @@
+﻿@inherits LayoutComponentBase
+@inject Radzen.DialogService DialogService
+@inject Radzen.NotificationService NotificationService
+@inject Radzen.TooltipService TooltipService
+@inject Radzen.ContextMenuService ContextMenuService
+
+<RadzenDialog />
+<RadzenNotification />
+<RadzenTooltip />
+<RadzenContextMenu />
+
+<div style="height: 100vh; display: flex; flex-direction: column;">
+    <!-- Top Toolbar (Simplified) -->
+    <div style="background-color: #f0f0f0; border-bottom: 1px solid #ccc; padding: 5px;">
+        <RadzenButton Icon="folder_open" Text="Add Database" Click="@AddDatabase" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" />
+        <RadzenButton Icon="refresh" Text="Refresh" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" />
+    </div>
+
+    <!-- Main Splitter -->
+    <div style="flex: 1; overflow: hidden;">
+        <RadzenSplitter Orientation="Orientation.Horizontal" style="height: 100%; border-top: 1px solid rgba(0,0,0,.12);">
+            <RadzenSplitterPane Size="300px" Min="200px" Max="500px">
+                <div style="height: 100%; overflow: auto;">
+                    <DatabaseTree @ref="dbTree" />
+                </div>
+            </RadzenSplitterPane>
+            <RadzenSplitterPane>
+                 <div style="height: 100%; overflow: auto; padding: 10px;">
+                    @Body
+                </div>
+            </RadzenSplitterPane>
+        </RadzenSplitter>
+    </div>
+    
+    <!-- Status Bar -->
+    <div style="height: 25px; background-color: #f0f0f0; border-top: 1px solid #ccc; font-size: 12px; padding: 4px;">
+        @statusMessage
+    </div>
+</div>
+
+@code {
+    DatabaseTree? dbTree;
+    string statusMessage = "Ready";
+
+    protected override void OnInitialized()
+    {
+        // Global error handling or status updates could go here
+    }
+
+    async Task AddDatabase()
+    {
+        // Open the custom dialog for file upload
+        // The dialog returns the full string path of the uploaded/selected file, or null if cancelled.
+        var result = await DialogService.OpenAsync<AddDatabaseDialog>("Add Database", 
+               new Dictionary<string, object>(),
+               new DialogOptions() { Width = "500px", Height = "auto" });
+
+        if (result != null)
+        {
+            var dbPath = result.ToString();
+            if (!string.IsNullOrEmpty(dbPath) && dbTree != null)
+            {
+               await dbTree.AddDatabase(dbPath);
+               statusMessage = $"Added Database: {dbPath}";
+            }
+        }
+    }
+
+    string? path;
+}

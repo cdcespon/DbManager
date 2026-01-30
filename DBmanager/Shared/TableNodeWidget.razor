@@ -1,0 +1,30 @@
+@using Blazor.Diagrams.Components.Renderers
+@using DBmanager.Models
+@using DBmanager.Shared
+
+<div class="card table-node" style="width: 250px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+    <div class="card-header bg-primary text-white py-1">
+        <strong>@Node.Title</strong>
+    </div>
+    <div class="card-body p-0 bg-white" style="font-size: 0.9em;">
+        @foreach (var col in (Node as TableNode)?.Columns ?? new List<ColumnInfo>())
+        {
+            <div class="d-flex justify-content-between px-2 py-1 border-bottom">
+                <span class="@(col.Pk > 0 ? "font-weight-bold text-primary" : "")">
+                    @if(col.Pk > 0) { <span class="mr-1">🔑</span> }
+                    @col.Name
+                </span>
+                <span class="text-muted small">@col.Type</span>
+            </div>
+        }
+    </div>
+    
+    @foreach (var port in Node.Ports)
+    {
+        <PortRenderer Port="port" />
+    }
+</div>
+
+@code {
+    [Parameter] public TableNode Node { get; set; } = null!;
+}

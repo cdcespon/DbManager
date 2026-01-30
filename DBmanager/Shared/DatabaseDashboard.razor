@@ -1,0 +1,115 @@
+@using DBmanager.Services
+@inject AppState AppState
+@inject SqliteService SqliteService
+
+<div style="padding: 20px;">
+    <div style="margin-bottom: 20px;">
+        <h2 style="margin: 0; color: #333;">@AppState.CurrentDatabaseName</h2>
+        <p style="margin: 5px 0 0 0; color: #666; font-size: 0.9em;">@AppState.CurrentDatabasePath</p>
+    </div>
+
+    <div class="row">
+        <div class="col-md-4">
+            <RadzenCard Style="margin-bottom: 20px; display: flex; align-items: center;">
+                <RadzenIcon Icon="data_usage" Style="font-size: 3em; margin-right: 20px; color: #1565c0;" />
+                <div>
+                    <div style="font-size: 2em; font-weight: bold;">@dbSize</div>
+                    <div style="color: #666;">Database Size</div>
+                </div>
+            </RadzenCard>
+        </div>
+         <div class="col-md-4">
+            <RadzenCard Style="margin-bottom: 20px; display: flex; align-items: center;">
+                <RadzenIcon Icon="table_chart" Style="font-size: 3em; margin-right: 20px; color: #2e7d32;" />
+                <div>
+                    <div style="font-size: 2em; font-weight: bold;">@tableCount</div>
+                    <div style="color: #666;">Tables</div>
+                </div>
+            </RadzenCard>
+        </div>
+         <div class="col-md-4">
+            <RadzenCard Style="margin-bottom: 20px; display: flex; align-items: center;">
+                 <RadzenIcon Icon="visibility" Style="font-size: 3em; margin-right: 20px; color: #ef6c00;" />
+                <div>
+                    <div style="font-size: 2em; font-weight: bold;">@viewCount</div>
+                    <div style="color: #666;">Views</div>
+                </div>
+            </RadzenCard>
+        </div>
+    </div>
+
+    <div class="row">
+         <div class="col-md-6">
+             <RadzenCard>
+                 <h3 style="margin-top: 0;">Quick Actions</h3>
+                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                     <!-- Actions triggered via Toolbar mostly, but can replicate here -->
+                     <RadzenButton Text="Refresh Data" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="LoadStats" />
+                 </div>
+             </RadzenCard>
+         </div>
+    </div>
+</div>
+
+@code {
+    string dbSize = "Loading...";
+    int tableCount = 0;
+    int viewCount = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AppState.OnChange += StateChanged;
+        await LoadStats();
+    }
+
+    void StateChanged()
+    {
+        InvokeAsync(async () => 
+        {
+            await LoadStats();
+            StateHasChanged();
+        });
+    }
+
+    async Task LoadStats()
+    {
+        if (string.IsNullOrEmpty(AppState.CurrentDatabasePath)) return;
+
+        try
+        {
+            // File Size
+            var fileInfo = new System.IO.FileInfo(AppState.CurrentDatabasePath);
+            if (fileInfo.Exists)
+            {
+                dbSize = FormatBytes(fileInfo.Length);
+            }
+
+            // Counts
+            var tables = await SqliteService.GetTablesAsync(AppState.CurrentConnectionString);
+            tableCount = tables.Count;
+
+            var views = await SqliteService.GetViewsAsync(AppState.CurrentConnectionString);
+            viewCount = views.Count;
+        }
+        catch
+        {
+            dbSize = "Error";
+        }
+    }
+
+    string FormatBytes(long bytes)
+    {
+        string[] suf = { "B", "KB", "MB", "GB", "TB" };
+        if (bytes == 0)
+            return "0" + suf[0];
+        long bytesAbs = Math.Abs(bytes);
+        int place = Convert.ToInt32(Math.Floor(Math.Log(bytesAbs, 1024)));
+        double num = Math.Round(bytesAbs / Math.Pow(1024, place), 1);
+        return (Math.Sign(bytes) * num).ToString() + " " + suf[place];
+    }
+
+    public void Dispose()
+    {
+        AppState.OnChange -= StateChanged;
+    }
+}

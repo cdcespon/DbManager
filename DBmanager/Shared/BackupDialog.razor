@@ -1,0 +1,164 @@
+@using DBmanager.Services
+@using DBmanager.Models
+@inject BackupService BackupService
+@inject AppState AppState
+@inject Radzen.DialogService DialogService
+@inject Radzen.NotificationService NotificationService
+
+<div style="height: 500px; display: flex; flex-direction: column;">
+    <div style="margin-bottom: 20px;">
+         <RadzenButton Text="Create Backup" Icon="add_circle_outline" Click="CreateBackup" ButtonStyle="ButtonStyle.Primary" />
+    </div>
+
+    <div style="flex: 1; overflow: auto;">
+        <RadzenDataGrid Data="@backups" TItem="BackupInfo" AllowSorting="true" AllowFiltering="true" Density="Density.Compact" GridLines="Radzen.DataGridGridLines.None"
+                RowRender="@RowRender">
+            <Columns>
+                <RadzenDataGridColumn TItem="BackupInfo" Title="File" Sortable="true" Filterable="true" Width="300px">
+                    <Template Context="data">
+                        <div style="display: flex; align-items: center;">
+                            <RadzenIcon Icon="description" Style="margin-right: 10px; color: #666;" />
+                             @if (editingName == data.FileName)
+                             {
+                                 <RadzenTextBox @bind-Value="tempName" Style="width: 100%;" Change="@((args) => ConfirmRename(data))" />
+                                 <RadzenButton Icon="check" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Success" Click="@(() => ConfirmRename(data))" Style="margin-left: 5px" />
+                                 <RadzenButton Icon="close" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light" Click="CancelRename" Style="margin-left: 5px" />
+                             }
+                             else
+                             {
+                                <span style="font-weight: 500;">@data.FileName</span>
+                             }
+                        </div>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="BackupInfo" Property="CreatedAt" Title="Date" Sortable="true" Width="150px">
+                    <Template Context="data">
+                        @data.CreatedAt.ToString("g")
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="BackupInfo" Property="SizeBytes" Title="Size" Sortable="true" Width="100px">
+                    <Template Context="data">
+                        @(Math.Round(data.SizeBytes / 1024.0, 2)) KB
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="BackupInfo" Title="Actions" Sortable="false" Filterable="false" TextAlign="TextAlign.Right">
+                    <Template Context="data">
+                        <RadzenButton Icon="edit" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@(() => StartRename(data))" Tooltip="Rename" Style="margin-right: 5px;" Disabled="@(editingName != null)" />
+                        <RadzenButton Icon="restore" ButtonStyle="ButtonStyle.Warning" Size="ButtonSize.Small" Click="@(() => RestoreBackup(data))" Tooltip="Restore" Style="margin-right: 5px;" />
+                        <RadzenButton Icon="delete" ButtonStyle="ButtonStyle.Danger" Size="ButtonSize.Small" Click="@(() => DeleteBackup(data))" Tooltip="Delete" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </div>
+</div>
+
+@code {
+    List<BackupInfo> backups = new List<BackupInfo>();
+    string? editingName;
+    string tempName = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadBackups();
+    }
+
+    async Task LoadBackups()
+    {
+        if (!string.IsNullOrEmpty(AppState.CurrentDatabasePath))
+        {
+            backups = await BackupService.GetBackupsAsync(AppState.CurrentDatabasePath);
+            StateHasChanged();
+        }
+    }
+
+    async Task CreateBackup()
+    {
+        if (string.IsNullOrEmpty(AppState.CurrentDatabasePath)) return;
+
+        try
+        {
+            await BackupService.CreateBackupAsync(AppState.CurrentDatabasePath);
+            NotificationService.Notify(NotificationSeverity.Success, "Backup Created", "Backup created successfully.");
+            await LoadBackups();
+        }
+        catch (Exception ex)
+        {
+            NotificationService.Notify(NotificationSeverity.Error, "Error", ex.Message);
+        }
+    }
+
+    async Task RestoreBackup(BackupInfo backup)
+    {
+        var result = await DialogService.Confirm($"Are you sure you want to restore '{backup.FileName}'? Current data will be overwritten.", "Restore Database", new ConfirmOptions() { OkButtonText = "Yes", CancelButtonText = "No" });
+        if (result == true)
+        {
+            try
+            {
+                await BackupService.RestoreBackupAsync(backup.FullPath, AppState.CurrentDatabasePath);
+                NotificationService.Notify(NotificationSeverity.Success, "Database Restored", "Database restored successfully. Please refresh the page.");
+                DialogService.Close(true); // Close dialog indicating success
+            }
+            catch (Exception ex)
+            {
+                NotificationService.Notify(NotificationSeverity.Error, "Recovery Failed", ex.Message);
+            }
+        }
+    }
+
+    async Task DeleteBackup(BackupInfo backup)
+    {
+         var result = await DialogService.Confirm($"Delete backup '{backup.FileName}'?", "Delete Backup", new ConfirmOptions() { OkButtonText = "Yes", CancelButtonText = "No" });
+        if (result == true)
+        {
+            try
+            {
+                await BackupService.DeleteBackupAsync(backup.FullPath);
+                await LoadBackups();
+                NotificationService.Notify(NotificationSeverity.Info, "Deleted", "Backup deleted.");
+            }
+            catch (Exception ex)
+            {
+                 NotificationService.Notify(NotificationSeverity.Error, "Delete Failed", ex.Message);
+            }
+        }
+    }
+
+    void StartRename(BackupInfo backup)
+    {
+        editingName = backup.FileName;
+        tempName = backup.FileName;
+    }
+
+    void CancelRename()
+    {
+        editingName = null;
+        tempName = "";
+    }
+
+    async Task ConfirmRename(BackupInfo backup)
+    {
+        if (string.IsNullOrWhiteSpace(tempName) || tempName == backup.FileName) 
+        {
+            CancelRename();
+            return;
+        }
+
+        try
+        {
+            await BackupService.RenameBackupAsync(backup.FullPath, tempName);
+            editingName = null;
+            await LoadBackups();
+             NotificationService.Notify(NotificationSeverity.Success, "Renamed", "Backup renamed successfully.");
+        }
+        catch (Exception ex)
+        {
+            NotificationService.Notify(NotificationSeverity.Error, "Rename Failed", ex.Message);
+        }
+    }
+
+    void RowRender(RowRenderEventArgs<BackupInfo> args)
+    {
+        // Optional: styling rows
+    }
+}

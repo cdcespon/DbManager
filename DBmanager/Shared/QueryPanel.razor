@@ -1,0 +1,146 @@
+@using DBmanager.Services
+@using DBmanager.Models
+@using System.Data
+@inject SqliteService SqliteService
+@inject AppState AppState
+@inject IJSRuntime JSRuntime
+@implements IDisposable
+
+<div style="padding: 10px; display: flex; flex-direction: column; height: calc(100vh - 120px);">
+    <div style="padding-bottom: 5px; display: flex; gap: 10px;">
+        <RadzenButton Icon="play_arrow" Click="ExecuteQuery" ButtonStyle="ButtonStyle.Success" Disabled="@(string.IsNullOrEmpty(AppState.CurrentConnectionString))" Tooltip="Execute Query" />
+    </div>
+    <div style="flex: 1; border: 1px solid #ccc; margin-bottom: 10px;">
+        <StandaloneCodeEditor @ref="_editor" ConstructionOptions="EditorConstructionOptions" OnDidInit="EditorOnDidInit" CssClass="h-100" />
+    </div>
+    
+    <div style="flex: 1; overflow: auto; min-height: 200px;">
+        @if (error != null)
+        {
+             <RadzenAlert Severity="AlertSeverity.Error" Variant="Variant.Filled" AlertStyle="AlertStyle.Danger" Icon="report" Shade="Shade.Dark" Text="@error" />
+        }
+        
+        @if (resultData != null)
+        {
+             <RadzenDataGrid Data="@resultData" TItem="IDictionary<string, object>" ColumnWidth="200px" AllowFiltering="true" AllowPaging="true" PageSize="50" AllowSorting="true">
+                <Columns>
+                    @foreach (var col in columns)
+                    {
+                        <RadzenDataGridColumn TItem="IDictionary<string, object>" Title="@col" Type="typeof(string)">
+                            <Template Context="data">
+                                @if(data.ContainsKey(col) && data[col] != null)
+                                {
+                                    @data[col].ToString()
+                                }
+                            </Template>
+                        </RadzenDataGridColumn>
+                    }
+                </Columns>
+            </RadzenDataGrid>
+        }
+    </div>
+</div>
+
+@code {
+    StandaloneCodeEditor _editor;
+    string? error;
+    IEnumerable<IDictionary<string, object>>? resultData;
+    List<string> columns = new List<string>();
+
+    private StandaloneEditorConstructionOptions EditorConstructionOptions(StandaloneCodeEditor editor)
+    {
+        string defaultQuery = "SELECT * FROM sqlite_schema";
+        if (!string.IsNullOrEmpty(AppState.CurrentTableName))
+        {
+            defaultQuery = $"SELECT * FROM {AppState.CurrentTableName} LIMIT 100";
+        }
+
+        return new StandaloneEditorConstructionOptions
+        {
+            AutomaticLayout = true,
+            Language = "sql",
+            Value = defaultQuery,
+            Theme = "vs-light", // or vs-dark
+            Minimap = new EditorMinimapOptions { Enabled = true, RenderCharacters = true }
+        };
+    }
+
+    private async Task EditorOnDidInit()
+    {
+        await JSRuntime.InvokeVoidAsync("sqlIntellisense.registerProvider");
+        await LoadSuggestions();
+    }
+
+    protected override void OnInitialized()
+    {
+        AppState.OnChange += OnStateChanged;
+    }
+
+    private void OnStateChanged()
+    {
+        InvokeAsync(async () => {
+            await LoadSuggestions();
+            
+            // Auto-update query if table changed
+            if (AppState.CurrentViewMode == ViewMode.TableDetails && !string.IsNullOrEmpty(AppState.CurrentTableName))
+            {
+                 string newQuery = $"SELECT * FROM {AppState.CurrentTableName} LIMIT 100";
+                 await _editor.SetValue(newQuery);
+            }
+        });
+    }
+
+    public void Dispose()
+    {
+        AppState.OnChange -= OnStateChanged;
+    }
+
+    async Task LoadSuggestions()
+    {
+         if (!string.IsNullOrEmpty(AppState.CurrentConnectionString))
+         {
+             var suggestions = await SqliteService.GetSchemaSuggestionsAsync(AppState.CurrentConnectionString);
+             await JSRuntime.InvokeVoidAsync("sqlIntellisense.updateSuggestions", suggestions);
+         }
+    }
+
+    async Task ExecuteQuery()
+    {
+        error = null;
+        resultData = null;
+        columns.Clear();
+
+        if (string.IsNullOrEmpty(AppState.CurrentConnectionString)) {
+            error = "No database connected.";
+            return;
+        }
+
+        try
+        {
+            var query = await _editor.GetValue();
+            
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(AppState.CurrentConnectionString);
+            await connection.OpenAsync();
+            
+            var rows = await Dapper.SqlMapper.QueryAsync(connection, query);
+            
+            if (rows.Any())
+            {
+                var firstRow = rows.First() as IDictionary<string, object>;
+                if (firstRow != null)
+                {
+                    columns = firstRow.Keys.ToList();
+                }
+                resultData = rows.Select(r => (IDictionary<string, object>)r).ToList();
+            }
+            else
+            {
+                 resultData = new List<IDictionary<string, object>>();
+            }
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+}

@@ -1,0 +1,106 @@
+@using DBmanager.Services
+@inject AppState AppState
+@inject Radzen.DialogService DialogService
+@implements IDisposable
+
+@if (!string.IsNullOrEmpty(AppState.CurrentDatabaseName))
+{
+    <div class="db-toolbar" style="
+        background: linear-gradient(90deg, #ffffff 0%, #f4f6f8 100%);
+        padding: 8px 15px;
+        border-bottom: 1px solid #e0e0e0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+        
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="
+                background-color: #e3f2fd; 
+                color: #1565c0; 
+                padding: 5px 10px; 
+                border-radius: 15px; 
+                font-size: 0.9em; 
+                font-weight: 500;
+                display: flex;
+                align-items: center;
+                gap: 5px;">
+                <RadzenIcon Icon="dns" Style="font-size: 1.2em;" />
+                @AppState.CurrentDatabaseName
+            </div>
+             @if (!string.IsNullOrEmpty(AppState.CurrentTableName))
+             {
+                 <RadzenIcon Icon="chevron_right" Style="color: #999; font-size: 1em;" />
+                 <div style="font-size: 0.9em; color: #555; font-weight: 500;">
+                     @AppState.CurrentTableName
+                 </div>
+             }
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+             <!-- Query Editor Button -->
+            <RadzenButton Icon="code" Text="Query Editor" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Flat" Size="ButtonSize.Small" Click="OpenQueryEditor" 
+                          Style="background-color: #f5f5f5; color: #333; border: 1px solid #ddd;" MouseEnter="@(args => {})" />
+
+             <!-- Backup Button -->
+            <RadzenButton Icon="backup" Text="Backups" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Flat" Size="ButtonSize.Small" Click="OpenBackups" 
+                          Style="background-color: #f5f5f5; color: #333; border: 1px solid #ddd;" MouseEnter="@(args => {})" />
+            
+             <!-- Diagram Designer Button -->
+            <RadzenButton Icon="account_tree" Text="Diagram Designer" ButtonStyle="ButtonStyle.Secondary" Variant="Variant.Flat" Size="ButtonSize.Small" Click="OpenDiagramDesigner" 
+                          Style="background-color: #f5f5f5; color: #333; border: 1px solid #ddd;" MouseEnter="@(args => {})" />
+            
+            <RadzenButton Icon="refresh" ButtonStyle="ButtonStyle.Light" Variant="Variant.Flat" Size="ButtonSize.Small" Tooltip="Refresh" />
+            <RadzenButton Icon="info" ButtonStyle="ButtonStyle.Light" Variant="Variant.Flat" Size="ButtonSize.Small" Tooltip="Info" />
+        </div>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized()
+    {
+        AppState.OnChange += StateChanged;
+    }
+
+    void StateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    async Task OpenBackups()
+    {
+        await DialogService.OpenAsync<BackupDialog>($"Backups: {AppState.CurrentDatabaseName}",
+               null,
+               new DialogOptions() { Width = "800px", Height = "600px", Resizable = true, Draggable = true });
+    }
+
+    async Task OpenQueryEditor()
+    {
+         // Ensure we have a database selected
+         if (!string.IsNullOrEmpty(AppState.CurrentDatabaseName))
+         {
+             AppState.SetViewMode(ViewMode.QueryEditor);
+         }
+         else
+         {
+             await DialogService.Alert("Please select a database first.", "Warning");
+         }
+    }
+
+    async Task OpenDiagramDesigner()
+    {
+         if (!string.IsNullOrEmpty(AppState.CurrentDatabaseName))
+         {
+             AppState.SetViewMode(ViewMode.DiagramDesigner);
+         }
+         else
+         {
+             await DialogService.Alert("Please select a database first.", "Warning");
+         }
+    }
+
+    public void Dispose()
+    {
+        AppState.OnChange -= StateChanged;
+    }
+}
